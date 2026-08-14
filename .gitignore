@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Ambiente virtual (89 MB; recriado com `pip install -e ".[dev]"`)
+.venv/
+venv/
+
+# Caches de ferramenta
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Bancos locais. A suíte cria SQLite efêmero em tmp_path, mas rascunhos de
+# migration e depuração caem na raiz — nenhum deles é fonte de verdade.
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# Segredos. O único caminho suportado para credencial é variável de ambiente
+# (NEUROLOOP_DATABASE_URL, ANTHROPIC_API_KEY); nada disso entra no repo.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Ferramentas de desenvolvimento local
+.claude/settings.local.json
+.idea/
+.vscode/
+*.swp
+
+# Sistema operacional
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log

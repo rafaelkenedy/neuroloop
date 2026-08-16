@@ -178,9 +178,10 @@ Documentos do projeto:
 |---|---|
 | [`00_prompt_original.md`](00_prompt_original.md) | Especificação original enviada ao projeto. |
 | [`01_especificacao_mvp.md`](01_especificacao_mvp.md) | Especificação de engenharia do MVP. |
-| [`02_correcoes_spec.md`](02_correcoes_spec.md) | 21 correções sobre a spec; lê-se junto com `01`, não no lugar dele. |
+| [`02_correcoes_spec.md`](02_correcoes_spec.md) | 26 correções sobre a spec; lê-se junto com `01`, não no lugar dele. |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Componentes, fluxo de dados e decisões técnicas. |
 | [`docs/API.md`](docs/API.md) | Endpoints, payloads e erros. |
+| [`docs/TESTE_MODELO_LOCAL.md`](docs/TESTE_MODELO_LOCAL.md) | Execução contra modelo real servido localmente: medições e configuração. |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | Fluxo de trabalho e checklist de PR. |
 | [`CHANGELOG.md`](CHANGELOG.md) | Histórico de versões. |
 

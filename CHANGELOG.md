@@ -10,7 +10,44 @@ Este projeto pretende seguir [Semantic Versioning](https://semver.org/lang/pt-BR
 
 ## [Não lançado]
 
-Nada ainda.
+### Adicionado
+
+- Adapter `OpenAICompatLLMClient` para servidor OpenAI-compatível (LM Studio,
+  Ollama, vLLM). Reusa `strict_json_schema` sem alteração e traduz o modo de
+  falha próprio de modelo de raciocínio: teto de tokens gasto em pensamento
+  devolve HTTP 200 com conteúdo vazio, não erro.
+- `scripts/live_local_model.py`: execução do runtime contra modelo real, fora da
+  suíte. Mede falso sucesso e exceção vazada, não acerto do modelo.
+- Reparo de deliberação com teto rígido (C22): uma saída inválida do LLM volta
+  ao modelo com o erro de validação em vez de derrubar o run. Padrão de 1
+  tentativa; `max_repairs=0` restaura o comportamento anterior.
+
+- `deliberator` passa a ser injetável no `AgentRuntime`, como os demais
+  componentes. Sem isso o perfil de modelo ficava fixo em `DELIBERATION`.
+- `docs/TESTE_MODELO_LOCAL.md`: medições de velocidade por modelo, razão de cada
+  teto configurado e o que ajustar para repetir o teste em hardware melhor.
+
+### Corrigido
+
+- Ids de observação não apareciam no prompt para observação confiável, embora a
+  instrução mandasse citá-los em `derived_from` e a tradução exigisse UUID
+  (C23). O contrato era impossível de cumprir e nenhum modelo o cumpria.
+- Seção TOOLS exibia `nome@versão`, e o modelo copiava a string inteira como
+  nome da tool — recusado pelo registry, que resolve pelo nome puro (C24).
+  Agora exibe `nome (vX, risco)`.
+- Adapter local traduzia falha de transporte formatando apenas `{error}`, e as
+  exceções de timeout do `httpx` têm `str()` vazio: a falha chegava como
+  `chamada ao servidor local falhou:`, sem tipo nem detalhe. O tipo da exceção
+  entra na mensagem (C25).
+- Teto de leitura do adapter local passou de 600s para 1800s, e o teto de
+  tokens do perfil local de 4096 para 8192, ambos dimensionados por medição e
+  não por hábito (C25).
+- `to_decision` rotulava como `PLANNING_ERROR` qualquer `ValueError` vindo de
+  validador, descartando o código que o próprio domínio anunciava na mensagem
+  (C26). Falha de proveniência aparecia como erro de planejamento e plano
+  cíclico como `PLANNING_ERROR` em vez de `INVALID_PLAN`.
+- Mensagem de erro do Deliberator repetia o código (`X: X: detalhe`) ao
+  reembrulhar `DecisionTranslationError`.
 
 ## [0.0.1] — não lançado
 

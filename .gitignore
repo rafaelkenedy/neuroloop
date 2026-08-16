@@ -44,3 +44,6 @@ desktop.ini
 
 # Logs
 *.log
+
+# Relatorio do harness de modelo local (scripts/live_local_model.py)
+live_local_report.json

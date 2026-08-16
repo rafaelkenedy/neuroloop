@@ -132,6 +132,7 @@ class AgentRuntime:
         evaluator: CriterionEvaluator | None = None,
         executor: DurableExecutor | None = None,
         verifier: Verifier | None = None,
+        deliberator: Deliberator | None = None,
         context_budget: ContextBudget | None = None,
         tracer: Tracer | None = None,
         http_prober=None,
@@ -160,7 +161,10 @@ class AgentRuntime:
         self.fast_path = FastPath(
             registry=registry, skills=skills, evaluator=self.evaluator
         )
-        self.deliberator = Deliberator(llm=llm, registry=registry)
+        # Injetável como os demais componentes. Sem isto o perfil de modelo
+        # fica fixo em DELIBERATION, e não há como apontar o runtime para um
+        # provider com outro teto de tokens sem editar esta linha.
+        self.deliberator = deliberator or Deliberator(llm=llm, registry=registry)
         self.planner = PlannerValidator(registry)
         self.retry_policy = RetryPolicy()
         self.tracer = tracer or RunEventTracer(session_factory)

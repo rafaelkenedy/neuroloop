@@ -34,6 +34,20 @@ Cada correção segue o formato: **problema → decisão → impacto**.
 | C20 | Stack: Python 3.13 | §26 | Baixa |
 | C21 | Backlog reordenado com walking skeleton | §36 | Alta |
 
+Correções posteriores à V0, levantadas ao exercitar o runtime contra um modelo
+real servido localmente. As três primeiras são defeitos que a suíte não podia
+pegar: vivem na costura entre instrução, renderização e validação, e o
+`FakeLLMClient` não as expõe porque quem escreve a saída do fake já conhece o
+formato aceito e a classificação esperada.
+
+| # | Correção | Seção afetada | Severidade |
+|---|---|---|---|
+| C22 | Reparo de deliberação com teto rígido | §11, §21 | Média |
+| C23 | Ids de observação ausentes do prompt | §19, §22 | Alta |
+| C24 | Nome de tool com versão colada no prompt | §19, §13 | Alta |
+| C25 | Teto de leitura dimensionado por medição | §21 | Baixa |
+| C26 | Classificação de erro descartada na tradução | §24 | Média |
+
 ---
 
 ## C01 — `Criterion` definido como união tipada
@@ -658,3 +672,224 @@ LEASE_LOST                  fencing token desatualizado
 Sem alteração — continuam válidos como perguntas de pesquisa: suficiência do retrieval SQL sem embeddings, horizonte ideal de planejamento, suficiência de um único Deliberator, limite do Fast Path, verificação de objetivos semanticamente vagos, impossibilidade de exactly-once em APIs arbitrárias, e o momento de migrar para um durable workflow framework.
 
 C16 reduz parcialmente o item 1 (parte do reuso deixa de depender de retrieval semântico), e C17 torna o item 5 mensurável ao forçar oracle independente.
+
+---
+
+## C22 — Reparo de deliberação com teto rígido
+
+**Problema.** `Deliberator.decide` tratava qualquer saída inválida do LLM como
+terminal: uma única resposta malformada virava `DeliberationError` e derrubava o
+run inteiro, sem segunda tentativa. Contra um modelo forte isso quase não
+aparece. Contra qualquer modelo mais fraco, aparece sempre — e o custo é
+desproporcional à causa, porque o erro típico é de encoding, não de julgamento.
+
+Medido contra `google/gemma-4-e4b` no LM Studio: em 5 execuções, 5 falhas, todas
+por `arguments_json` malformado (`'./orders.json'` no lugar de
+`{"path": "./orders.json"}`). O modelo acertava o nome da tool — tinha lido o
+registry no prompt — e errava só a serialização.
+
+O detalhe que torna isso estrutural: `arguments_json` é uma string porque
+structured outputs proíbem objeto de forma livre (`additionalProperties: false`
+obrigatório em todo objeto). A própria restrição do schema é o que força o
+modelo a serializar JSON à mão, e é exatamente aí que ele quebra.
+
+**Decisão.** `Deliberator` ganha `max_repairs` (padrão 1). Numa falha reparável
+a decisão rejeitada volta ao modelo como turno de assistente, seguida do erro de
+validação e de um pedido de correção.
+
+Três limites que fazem parte da decisão, não são detalhe de implementação:
+
+| Limite | Motivo |
+|---|---|
+| Teto rígido, `max_repairs=0` restaura o comportamento antigo | Reparo sem limite vira "perguntar até o modelo dizer sim"; a decisão passaria por insistência, não por estar certa — o oposto do que a porta de validação existe para fazer |
+| Só falha semântica é reparável; `LLMError` não | Feedback não conserta transporte caído. Reenviar por baixo do pano transformaria falha de rede em custo silencioso |
+| `usage` é somado entre tentativas, e vai junto no erro | Um reparo custa uma chamada a mais. Cobrar só a última esconderia metade da conta e reabriria o buraco que C12 fechou |
+| O prompt acumula o histórico de falhas em vez de ser reconstruído | Com mais de um reparo, mostrar só a falha mais recente deixa o modelo reintroduzir o erro anterior e oscilar entre os dois até esgotar o teto |
+
+O código de erro que sobe é o da última tentativa, porque é ele que descreve o
+que de fato barrou a decisão; a falha original vai no texto. Saber que o modelo
+errou duas vezes seguidas é o sinal que distingue modelo inadequado de azar
+pontual — sem isso o trace mostraria só o sintoma final.
+
+**Impacto.** Três testes das portas passaram a enfileirar a saída ruim duas
+vezes: a intenção deles ("tool inválida nunca passa") continua valendo, mas uma
+saída ruim já não encerra o run sozinha. Dez testes novos cobrem o reparo, o
+teto, a não-reparabilidade de `LLMError` e a soma de `usage`.
+
+**O que isto não resolve.** Reparo não compensa modelo incapaz. Com
+`gemma-4-e4b` o feedback é entregue corretamente e o modelo erra de novo
+(`'./'` → `'.'`). O runtime continua recusando: nas medições com modelo local,
+`falso_sucesso` e `excecao_vazou` seguem em zero.
+
+---
+
+## C23 — Ids de observação ausentes do prompt
+
+**Problema.** O contrato de proveniência era impossível de cumprir. Três camadas
+discordavam:
+
+| Camada | O que estabelece |
+|---|---|
+| `TASK_INSTRUCTION` | "Em `derived_from`, liste os ids das observações de onde os argumentos vieram" |
+| `_render_observations` | Renderizava `[kind \| trust]` — o id só aparecia dentro de `wrap_untrusted`, ou seja, apenas para `UNTRUSTED_EXTERNAL` |
+| `to_decision` | Exige UUID válido em `derived_from`, sob pena de `TOOL_VALIDATION_ERROR` |
+
+Um modelo diante de observação confiável era cobrado por um dado que o prompt
+nunca lhe deu. Restavam duas saídas, ambas ruins: inventar um id — recusado na
+tradução — ou deixar `derived_from` vazio, o que por C10 vira proveniência não
+auditável e portanto não confiável.
+
+Medido contra três modelos locais, sempre o mesmo padrão: `'USER'`,
+`'user_request'`, `'OBJETIVO'`, `'Objective: criar o arquivo...'`. Nenhum
+inventou um UUID; todos citaram texto, porque texto era tudo o que havia.
+
+**Por que a suíte não pegou.** As saídas do `FakeLLMClient` são escritas à mão
+com `derived_from=[str(uuid4())]`. O teste fornece um UUID que o prompt nunca
+ofereceu — o fake contorna exatamente o contrato que estava quebrado. Nenhum
+teste comparava o que o prompt entrega com o que a validação exige.
+
+Isto é o argumento concreto a favor de exercitar o runtime contra um modelo que
+não seja o autor do teste: o defeito não estava em nenhum componente isolado,
+mas na costura entre instrução, renderização e validação — e cada componente
+passava nos próprios testes.
+
+**Decisão.** O id vai no cabeçalho de toda observação, em qualquer nível de
+trust: `[id=<uuid> | <kind> | <trust>]`.
+
+**Impacto.** Dois testes novos em `test_workspace.py` travam o contrato: o id de
+observação confiável aparece no prompt, e aparece para todo valor de
+`TrustLevel`. O custo é 36 caracteres por observação.
+
+**O que isto não resolve.** Citar o id passa a ser possível; não passa a ser
+garantido. Um modelo ainda pode ignorar a instrução, e C10 continua tratando a
+omissão como proveniência não auditável — que é o comportamento desejado.
+
+---
+
+## C24 — Nome de tool com versão colada no prompt
+
+**Problema.** Mesma costura de C23, outro campo. `_render_tools` produzia:
+
+```text
+- filesystem.write@1.0.0 [R1]: grava arquivo no sandbox
+```
+
+`TASK_INSTRUCTION` manda "use apenas tools listadas em TOOLS", e o modelo fazia
+exatamente isso: copiava `filesystem.write@1.0.0` como nome da tool. Mas
+`ToolRegistry.get` resolve pelo nome puro, então a decisão morria em
+`TOOL_SELECTION_ERROR`.
+
+O comportamento do modelo estava certo. O prompt é que apresentava um
+identificador numa forma que o validador recusa.
+
+Medido com `google/gemma-4-12b-qat` depois de C23: a primeira chamada usou
+`filesystem.read` e passou; a segunda usou `filesystem.write@1.0.0` e foi
+recusada, inclusive depois do reparo — porque o reparo devolve o erro, e o
+modelo relê a mesma lista que o induziu ao erro.
+
+**Por que a suíte não pegou.** Igual a C23: as saídas do `FakeLLMClient` trazem
+`tool="filesystem.write"` escrito à mão, nunca a forma que o prompt exibe.
+Nenhum teste comparava o identificador exibido com o identificador aceito.
+
+**Decisão.** Nome primeiro e isolado; versão e risco viram metadado:
+
+```text
+- filesystem.write (v1.0.0, R1): grava arquivo no sandbox
+```
+
+A versão continua no prompt — skill desconfia de si mesma quando a versão da
+tool muda (C15) — mas deixa de parecer parte do nome.
+
+**Impacto.** Um teste novo em `test_workspace.py` extrai o identificador de cada
+linha da seção TOOLS e exige que o registry o resolva. O teste não fixa formato:
+qualquer decoração futura que grude no nome quebra nele. Verificado que falha
+com o formato antigo, com o mesmo `ToolNotFoundError` observado no modelo real.
+
+**Padrão que C23 e C24 revelam.** Os dois defeitos vivem entre componentes que
+passam nos próprios testes: instrução, renderização e validação concordavam
+isoladamente e discordavam em conjunto. O `FakeLLMClient` não podia expor isso,
+porque quem escreve a saída do fake é quem conhece o formato aceito — nunca o
+formato exibido. Vale um teste de costura para cada dado que o prompt pede que o
+modelo cite de volta.
+
+---
+
+## C25 — Teto de leitura dimensionado por medição
+
+**Problema.** O adapter local usava 600s de timeout, valor escolhido por hábito.
+Contra `google/gemma-4-12b-qat` isso não cobre uma deliberação: o modelo gera a
+~9 tok/s e o perfil local permite 4096 tokens, ou seja, ~440s só de geração,
+antes do processamento do prompt.
+
+O sintoma era característico e apontava para a causa: em três baterias
+consecutivas a falha caiu sempre na **segunda** deliberação, nunca na primeira.
+A segunda é a que já carrega o conteúdo do arquivo lido no ciclo anterior — o
+prompt cresce, o processamento cresce junto, e o teto estoura.
+
+**Decisão.** `DEFAULT_TIMEOUT = 1800.0`, documentado com a medição que o
+justifica. Teto largo não custa nada quando a chamada funciona: só adia o erro
+quando ela não funciona, e inferência local não é cobrada por segundo.
+
+**Defeito de diagnóstico corrigido junto.** A tradução da falha de transporte
+formatava apenas `{error}`, e as exceções de timeout do `httpx` têm `str()`
+vazio. A falha chegava como `chamada ao servidor local falhou:` — sem tipo, sem
+detalhe, indistinguível de conexão recusada. Foram necessárias três baterias
+para descobrir que era `ReadTimeout`, quando uma teria bastado. O tipo da
+exceção agora entra na mensagem, com teste.
+
+**Fronteira.** `REASONING_ERROR` por transporte é limitação da infraestrutura
+local, não defeito do runtime. Vale registrar porque a distinção não é óbvia no
+relatório: o mesmo `ErrorCode` cobre desde servidor fora do ar até resposta
+vazia por orçamento de raciocínio, e sem a mensagem original as três causas são
+indistinguíveis.
+
+---
+
+## C26 — Classificação de erro descartada na tradução
+
+**Problema.** `to_decision` terminava com um `except ValueError` genérico que
+rotulava tudo como `PLANNING_ERROR`:
+
+```python
+except ValueError as error:
+    raise DecisionTranslationError(str(error), ErrorCode.PLANNING_ERROR)
+```
+
+Pydantic exige que validador levante `ValueError`, o que apaga o tipo da
+exceção. Os validadores do domínio contornavam isso escrevendo o próprio código
+no início da mensagem — e o handler genérico descartava essa informação,
+substituindo por um código guarda-chuva.
+
+O resultado era uma mensagem que se contradiz:
+
+```text
+PLANNING_ERROR: Value error, TOOL_VALIDATION_ERROR: ação com argumentos
+precisa declarar derived_from (proveniência das observações)
+```
+
+Falha de proveniência reportada como falha de planejamento. Contra modelo local
+isso acontecia em quase toda execução, e `PLANNING_ERROR` dominava os relatórios
+sem nunca ter sido sobre planejamento.
+
+**Decisão.** O handler lê de volta o código que o validador anunciou; só usa
+`PLANNING_ERROR` quando não há nenhum. É stringly-typed por imposição do
+Pydantic, não por escolha — a alternativa seria abrir mão da validação
+declarativa.
+
+**Alcance maior que o caso que o expôs.** Ao corrigir, plano cíclico passou a
+reportar `INVALID_PLAN`, que é o código que o validador de `Plan` sempre
+escreveu e que vinha sendo sobrescrito. Um teste existente esperava
+`PLANNING_ERROR` para ciclo; foi atualizado, porque `INVALID_PLAN` existe na
+taxonomia exatamente para isso. O `except` genérico não errava num caso
+específico: apagava classificações corretas em todos.
+
+**Impacto.** Sem consequência comportamental — nada no runtime ramifica por
+esses códigos. O dano era de diagnóstico e observabilidade: o código errado ia
+para o trace, para o `explain` e para o histórico do run. Numa taxonomia cujo
+propósito é dizer o que deu errado, apontar para o lugar errado anula o
+propósito.
+
+**Como apareceu.** Só com modelo real, e só depois de instrumentar o harness
+para capturar a mensagem do `DeliberationError` — o `RunResult` devolve apenas
+o `ErrorCode`. O `FakeLLMClient` não podia expor: as saídas de teste são
+escritas com `derived_from` já preenchido.

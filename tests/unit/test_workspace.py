@@ -319,3 +319,78 @@ class TestPrioridadeDoPrompt:
             errors=(RecentError(error_code=ErrorCode.TOOL_TIMEOUT, at=NOW),),
         )
         assert "TOOL_TIMEOUT" in render_prompt(context)
+
+
+class TestProvenienciaCitavel:
+    """O prompt precisa oferecer o que a instrução manda citar.
+
+    `TASK_INSTRUCTION` pede os ids das observações em `derived_from`, e
+    `to_decision` exige UUID válido. Enquanto o id não aparecia no prompt de
+    observação confiável, o contrato era impossível: o modelo só podia
+    inventar, e C10 então tratava a proveniência como não auditável.
+
+    A suíte não pegava isso porque as saídas do FakeLLMClient são escritas à
+    mão com um UUID que o prompt nunca ofereceu.
+    """
+
+    def test_id_de_observacao_confiavel_aparece_no_prompt(self):
+        obs = observation(kind="goal", trust=TrustLevel.TRUSTED_INTERNAL)
+        ctx = WorkspaceBuilder(ContextBudget()).build(
+            goal=make_goal(success_criteria=(FileExists(path="out.json"),)),
+            checkpoint=make_checkpoint(),
+            now=NOW,
+            observations=[obs],
+        )
+        assert str(obs.id) in render_prompt(ctx)
+
+    def test_id_aparece_para_todo_nivel_de_trust(self):
+        observacoes = [observation(kind="goal", trust=t) for t in TrustLevel]
+        ctx = WorkspaceBuilder(ContextBudget()).build(
+            goal=make_goal(success_criteria=(FileExists(path="out.json"),)),
+            checkpoint=make_checkpoint(),
+            now=NOW,
+            observations=observacoes,
+        )
+        prompt = render_prompt(ctx)
+        for obs in observacoes:
+            assert str(obs.id) in prompt, f"id ausente para trust={obs.trust}"
+
+
+class TestNomesDeToolResolvem:
+    """O nome que o prompt exibe precisa ser o nome que o registry resolve.
+
+    A instrução manda usar apenas tools listadas em TOOLS. Quando o prompt
+    renderizava `nome@versão`, o modelo copiava a string inteira como nome —
+    comportamento correto do ponto de vista dele — e a decisão morria em
+    `TOOL_SELECTION_ERROR`.
+
+    O teste não fixa formato: extrai o identificador de cada linha e exige
+    que o registry o resolva. Qualquer decoração futura que grude no nome
+    quebra aqui.
+    """
+
+    def test_identificador_listado_resolve_no_registry(self, tmp_path):
+        from neuroloop.tools import Sandbox, ToolRegistry
+        from neuroloop.tools.adapters import register_filesystem_tools
+
+        (tmp_path / "workspace").mkdir()
+        registry = ToolRegistry()
+        register_filesystem_tools(registry, Sandbox(tmp_path / "workspace"))
+
+        ctx = WorkspaceBuilder(ContextBudget()).build(
+            goal=make_goal(success_criteria=(FileExists(path="out.json"),)),
+            checkpoint=make_checkpoint(),
+            now=NOW,
+            tools=tuple(registry.summaries()),
+        )
+        prompt = render_prompt(ctx)
+        secao = prompt.split("# TOOLS\n", 1)[1].split("\n# ", 1)[0]
+
+        listados = [
+            linha[2:].split(" ", 1)[0]
+            for linha in secao.splitlines()
+            if linha.startswith("- ")
+        ]
+        assert listados, "seção TOOLS vazia"
+        for nome in listados:
+            registry.get(nome)  # levanta ToolNotFoundError se não resolver

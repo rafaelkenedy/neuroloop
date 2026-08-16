@@ -296,4 +296,25 @@ def to_decision(raw: LlmDecision, *, plan_id: UUID, plan_version: int = 1) -> De
     except DecisionTranslationError:
         raise
     except ValueError as error:
-        raise DecisionTranslationError(str(error), ErrorCode.PLANNING_ERROR) from error
+        raise DecisionTranslationError(
+            str(error), _codigo_embutido(str(error))
+        ) from error
+
+
+def _codigo_embutido(mensagem: str) -> ErrorCode:
+    """Recupera o código que o validador de domínio embutiu na mensagem.
+
+    Pydantic exige que validador levante `ValueError`, o que apaga o tipo da
+    exceção original. Sem isto, tudo que sobe de um validador vira
+    `PLANNING_ERROR` — inclusive falha de proveniência, que não tem nada a ver
+    com planejamento. Um modelo local que omitia `derived_from` era reportado
+    como erro de planejamento em toda execução, e a taxonomia de falhas, cujo
+    propósito é dizer o que deu errado, apontava para o lugar errado.
+
+    Os validadores do domínio já prefixam a mensagem com o próprio código;
+    aqui só se lê de volta o que eles escreveram.
+    """
+    for code in ErrorCode:
+        if code.value in mensagem:
+            return code
+    return ErrorCode.PLANNING_ERROR

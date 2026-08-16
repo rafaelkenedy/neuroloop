@@ -80,6 +80,31 @@ Um teste isolado:
 `filterwarnings = ["error"]` está ativo: um warning novo quebra a suíte. Isso é
 intencional.
 
+## Teste contra modelo real (opcional)
+
+A suíte inteira usa `FakeLLMClient`. Isso é proposital: medir o runtime exige a
+variável do modelo fixa. Mas significa que as portas de validação só veem saída
+escrita por quem escreveu o teste.
+
+`scripts/live_local_model.py` roda o runtime contra um servidor
+OpenAI-compatível (LM Studio, Ollama, vLLM). Não entra na suíte: exige servidor
+externo, é lento e não é determinístico.
+
+```
+.venv/Scripts/python.exe scripts/live_local_model.py --runs 6 --model "google/gemma-4-12b-qat"
+```
+
+O critério não é "o modelo acertou". É `falso_sucesso: 0` e `excecao_vazou: 0` —
+um modelo fraco gera entrada adversarial de graça, e o runtime precisa recusar
+em vez de executar lixo ou quebrar.
+
+Três defeitos reais saíram daí (C23, C24, C26), nenhum detectável pela suíte:
+todos viviam na costura entre instrução, renderização e validação, onde o
+`FakeLLMClient` é cego por construção.
+
+Medições, configuração e o que ajustar em hardware melhor estão em
+[`docs/TESTE_MODELO_LOCAL.md`](docs/TESTE_MODELO_LOCAL.md).
+
 ## Lint e formatação
 
 `pyproject.toml` configura `ruff` (linha 100, regras `E,F,I,UP,B,SIM`), mas a ferramenta

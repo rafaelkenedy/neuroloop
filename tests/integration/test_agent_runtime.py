@@ -515,3 +515,35 @@ class TestReusoEntreRuns:
         assert cached is not None
         assert cached.successes == 1
         assert len(cached.plan.steps) == 2
+
+
+class TestDeliberatorInjetavel:
+    """Todo componente do runtime é injetável; o Deliberator era a exceção.
+
+    Sem isto o perfil de modelo fica preso em DELIBERATION, e apontar o
+    runtime para um provider com outro teto de tokens exigia editar o
+    construtor.
+    """
+
+    def test_deliberator_injetado_e_usado(self, engine, registry, sandbox):
+        from neuroloop.cognition.deliberator import Deliberator
+        from neuroloop.llm.client import ModelProfile
+
+        perfil = ModelProfile(name="OUTRO", model="modelo.local", max_tokens=512)
+        proprio = Deliberator(
+            llm=FakeLLMClient(), registry=registry, model_profile=perfil
+        )
+        runtime = build_runtime(
+            engine, registry, sandbox, FakeLLMClient(), deliberator=proprio
+        )
+
+        assert runtime.deliberator is proprio
+        # O perfil precisa chegar nas versões: é o que torna uma decisão
+        # passada reproduzível (spec §33).
+        assert runtime.versions.model == "modelo.local"
+
+    def test_sem_injecao_mantem_o_padrao(self, engine, registry, sandbox):
+        from neuroloop.llm.client import DELIBERATION
+
+        runtime = build_runtime(engine, registry, sandbox, FakeLLMClient())
+        assert runtime.versions.model == DELIBERATION.model

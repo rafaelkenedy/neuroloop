@@ -147,7 +147,12 @@ def _render_observations(context: WorkingContext) -> str:
             corpo = wrap_untrusted(
                 corpo, source=obs.source_ref or obs.kind, observation_id=str(obs.id)
             )
-        blocos.append(f"[{obs.kind} | {obs.trust.value}]\n{corpo}")
+        # O id vai no cabeçalho de **toda** observação, não só das externas.
+        # `derived_from` exige UUID e a instrução do Deliberator manda citar
+        # os ids; sem eles no prompt o modelo é cobrado por um dado que nunca
+        # recebeu, e só pode inventar — o que C10 então trata como
+        # proveniência não auditável.
+        blocos.append(f"[id={obs.id} | {obs.kind} | {obs.trust.value}]\n{corpo}")
     return "\n\n".join(blocos)
 
 
@@ -168,7 +173,16 @@ def _render_errors(context: WorkingContext) -> str:
 
 
 def _render_tools(context: WorkingContext) -> str:
+    """Nome primeiro e isolado; versão e risco como metadado entre parênteses.
+
+    O formato antigo era `nome@versão [risco]`, e o modelo copiava
+    `filesystem.write@1.0.0` como nome da tool — comportamento correto, dado
+    que a instrução manda usar apenas o que está listado. Só que o registry
+    resolve pelo nome puro, então a decisão morria em `TOOL_SELECTION_ERROR`.
+    A versão continua no prompt porque skill desconfia de si mesma quando a
+    versão da tool muda; o que mudou é ela não se parecer mais com o nome.
+    """
     return "\n".join(
-        f"- {t.name}@{t.version} [{t.risk_level.value}]: {t.description}"
+        f"- {t.name} (v{t.version}, {t.risk_level.value}): {t.description}"
         for t in context.available_tools
     )

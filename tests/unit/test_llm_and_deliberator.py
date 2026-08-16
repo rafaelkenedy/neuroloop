@@ -240,7 +240,10 @@ class TestTraducao:
                 ],
             ),
         )
-        with pytest.raises(Exception, match=ErrorCode.PLANNING_ERROR.value):
+        # `INVALID_PLAN`, não `PLANNING_ERROR`: o validador do domínio já
+        # classificava o ciclo corretamente, e o `except ValueError` genérico
+        # da tradução é que sobrescrevia com o código guarda-chuva.
+        with pytest.raises(Exception, match=ErrorCode.INVALID_PLAN.value):
             to_decision(raw, plan_id=uuid4())
 
 
@@ -253,7 +256,9 @@ class TestPortasDoDeliberator:
     async def test_tool_inexistente_e_barrada(self, registry):
         raw = act_output()
         raw.action.tool = "shell.rm_rf"
-        llm = FakeLLMClient(outputs=[raw])
+        # Duas saídas: o deliberator oferece um reparo, e aqui o modelo insiste
+        # no mesmo erro. A porta precisa barrar mesmo assim.
+        llm = FakeLLMClient(outputs=[raw, raw])
 
         with pytest.raises(DeliberationError) as exc:
             await Deliberator(llm=llm, registry=registry).decide(context())
@@ -263,7 +268,7 @@ class TestPortasDoDeliberator:
         """Schema do provider garante forma; isto garante que é executável."""
         raw = act_output()
         raw.action.arguments_json = json.dumps({"path": "out.json"})  # falta content
-        llm = FakeLLMClient(outputs=[raw])
+        llm = FakeLLMClient(outputs=[raw, raw])
 
         with pytest.raises(DeliberationError) as exc:
             await Deliberator(llm=llm, registry=registry).decide(context())
@@ -286,7 +291,7 @@ class TestPortasDoDeliberator:
                 ],
             ),
         )
-        llm = FakeLLMClient(outputs=[raw])
+        llm = FakeLLMClient(outputs=[raw, raw])
         with pytest.raises(DeliberationError) as exc:
             await Deliberator(llm=llm, registry=registry).decide(context())
         assert exc.value.error_code is ErrorCode.TOOL_SELECTION_ERROR
@@ -369,3 +374,252 @@ class TestPromptEnviado:
         await Deliberator(llm=llm, registry=registry).decide(context())
         assert llm.calls[-1].model_profile.model == "claude-opus-5"
         assert llm.calls[-1].output_schema is LlmDecision
+
+
+class TestReparoDeDeliberacao:
+    """Uma saída malformada não deve matar o run na primeira tentativa.
+
+    O reparo devolve o erro de validação ao modelo e pede correção. O que
+    estes testes protegem não é o reparo em si: é o teto. Reparo sem limite
+    vira insistência até o modelo dizer sim, e aí a porta de validação
+    deixa de significar alguma coisa.
+    """
+
+    async def test_reparo_salva_decisao_corrigivel(self, registry):
+        ruim = act_output()
+        ruim.action.arguments_json = json.dumps({"path": "out.json"})  # falta content
+        llm = FakeLLMClient(outputs=[ruim, act_output()])
+
+        result = await Deliberator(llm=llm, registry=registry).decide(context())
+
+        assert result.decision_type == "ACT"
+        assert result.repairs == 1
+        assert len(llm.calls) == 2
+
+    async def test_decisao_valida_nao_gasta_reparo(self, registry):
+        llm = FakeLLMClient(outputs=[act_output()])
+        result = await Deliberator(llm=llm, registry=registry).decide(context())
+        assert result.repairs == 0
+        assert len(llm.calls) == 1
+
+    async def test_teto_de_reparos_e_respeitado(self, registry):
+        """Insistir no erro esgota o teto; não vira laço infinito."""
+        ruim = act_output()
+        ruim.action.tool = "shell.rm_rf"
+        llm = FakeLLMClient(outputs=[ruim] * 5)
+
+        with pytest.raises(DeliberationError) as exc:
+            await Deliberator(llm=llm, registry=registry, max_repairs=2).decide(context())
+
+        assert exc.value.error_code is ErrorCode.TOOL_SELECTION_ERROR
+        assert len(llm.calls) == 3  # 1 tentativa + 2 reparos
+
+    async def test_max_repairs_zero_restaura_tentativa_unica(self, registry):
+        ruim = act_output()
+        ruim.action.tool = "shell.rm_rf"
+        llm = FakeLLMClient(outputs=[ruim, act_output()])
+
+        with pytest.raises(DeliberationError):
+            await Deliberator(llm=llm, registry=registry, max_repairs=0).decide(context())
+        assert len(llm.calls) == 1
+
+    async def test_prompt_de_reparo_carrega_o_erro(self, registry):
+        """Sem o erro no prompt, o reparo é só uma segunda amostra aleatória."""
+        ruim = act_output()
+        ruim.action.arguments_json = json.dumps({"path": "out.json"})
+        llm = FakeLLMClient(outputs=[ruim, act_output()])
+
+        await Deliberator(llm=llm, registry=registry).decide(context())
+
+        ultimo = llm.calls[-1].messages
+        texto = ultimo[-1].content
+        assert "REJEITADA" in texto
+        assert "TOOL_VALIDATION_ERROR" in texto
+        # A decisão rejeitada volta como turno do assistente, para o modelo
+        # ver o que produziu em vez de adivinhar.
+        assert ultimo[-2].role == "assistant"
+
+    async def test_usage_soma_as_duas_chamadas(self, registry):
+        """C12: cobrar só a última chamada esconderia metade da conta."""
+        ruim = act_output()
+        ruim.action.arguments_json = json.dumps({"path": "out.json"})
+        llm = FakeLLMClient(outputs=[ruim, act_output()])
+
+        result = await Deliberator(llm=llm, registry=registry).decide(context())
+
+        uma = FakeLLMClient(outputs=[act_output()])
+        sozinha = await Deliberator(llm=uma, registry=registry).decide(context())
+        assert result.usage.total_tokens == 2 * sozinha.usage.total_tokens
+
+    async def test_reparos_acumulam_o_historico(self, registry):
+        """Mostrar só a última falha deixa o modelo oscilar entre dois erros.
+
+        Com dois reparos, se a tentativa 1 erra em A e a 2 em B, reconstruir
+        o prompt do zero faz a tentativa 3 ver apenas B — e reintroduzir A
+        fica livre. O teto seria gasto indo e voltando.
+        """
+        erro_a = act_output()
+        erro_a.action.arguments_json = "{nao e json"
+        erro_b = act_output()
+        erro_b.action.tool = "shell.rm_rf"
+        llm = FakeLLMClient(outputs=[erro_a, erro_b, act_output()])
+
+        result = await Deliberator(
+            llm=llm, registry=registry, max_repairs=2
+        ).decide(context())
+
+        assert result.repairs == 2
+        papeis = [m.role for m in llm.calls[-1].messages]
+        # user inicial + (assistant + user) por reparo
+        assert papeis == ["user", "assistant", "user", "assistant", "user"]
+        texto = " ".join(m.content for m in llm.calls[-1].messages)
+        assert ErrorCode.TOOL_VALIDATION_ERROR.value in texto
+        assert ErrorCode.TOOL_SELECTION_ERROR.value in texto
+
+    async def test_falha_de_provider_nao_e_reparada(self, registry):
+        """Feedback não conserta transporte caído; reenviar seria custo mudo."""
+        llm = FakeLLMClient(outputs=[])
+
+        with pytest.raises(DeliberationError) as exc:
+            await Deliberator(llm=llm, registry=registry).decide(context())
+
+        assert exc.value.error_code is ErrorCode.REASONING_ERROR
+        assert len(llm.calls) == 1
+
+    async def test_feedback_nao_repete_o_codigo_de_erro(self, registry):
+        """`X: X: detalhe` suja o trace e gasta contexto do modelo à toa."""
+        ruim = act_output()
+        ruim.action.arguments_json = "{isso não é json"
+        llm = FakeLLMClient(outputs=[ruim, act_output()])
+
+        await Deliberator(llm=llm, registry=registry).decide(context())
+
+        texto = llm.calls[-1].messages[-1].content
+        assert texto.count(ErrorCode.TOOL_VALIDATION_ERROR.value) == 1
+
+    async def test_erro_final_preserva_a_falha_original(self, registry):
+        """Sem isso o trace mostra só o sintoma final e esconde o reparo."""
+        primeiro = act_output()
+        primeiro.action.arguments_json = "{não é json"
+        segundo = act_output()
+        segundo.action.tool = "shell.rm_rf"
+        llm = FakeLLMClient(outputs=[primeiro, segundo])
+
+        with pytest.raises(DeliberationError) as exc:
+            await Deliberator(llm=llm, registry=registry).decide(context())
+
+        assert exc.value.error_code is ErrorCode.TOOL_SELECTION_ERROR
+        assert "falha original" in str(exc.value)
+        assert ErrorCode.TOOL_VALIDATION_ERROR.value in str(exc.value)
+
+    async def test_erro_carrega_o_consumo_gasto(self, registry):
+        """C12: tentativa perdida também queima tokens; alguém precisa cobrar."""
+        ruim = act_output()
+        ruim.action.tool = "shell.rm_rf"
+        llm = FakeLLMClient(outputs=[ruim, ruim], input_tokens=100, output_tokens=50)
+
+        with pytest.raises(DeliberationError) as exc:
+            await Deliberator(llm=llm, registry=registry).decide(context())
+
+        assert exc.value.usage is not None
+        assert exc.value.usage.total_tokens == 300  # duas chamadas
+
+
+class TestAdapterLocal:
+    """Adapter OpenAI-compatível: tradução de falhas do servidor local."""
+
+    async def test_falha_de_transporte_nomeia_o_tipo(self):
+        """Timeout do httpx tem `str()` vazio; sem o tipo a mensagem é muda."""
+        import httpx
+
+        from neuroloop.llm.client import LLMError, Message
+        from neuroloop.llm.openai_compat import (
+            LOCAL_DELIBERATION,
+            OpenAICompatLLMClient,
+        )
+
+        class ClienteQueEstoura:
+            async def post(self, *a, **kw):
+                raise httpx.ReadTimeout("")
+
+            async def aclose(self):
+                return None
+
+        cliente = OpenAICompatLLMClient(client=ClienteQueEstoura())
+        with pytest.raises(LLMError) as exc:
+            await cliente.structured(
+                messages=[Message(role="user", content="oi")],
+                output_schema=LlmDecision,
+                model_profile=LOCAL_DELIBERATION,
+            )
+        assert "ReadTimeout" in str(exc.value)
+
+    async def test_teto_gasto_em_raciocinio_tem_mensagem_propria(self):
+        """HTTP 200 com conteúdo vazio não é "JSON inválido"."""
+        from neuroloop.llm.client import LLMError, Message
+        from neuroloop.llm.openai_compat import (
+            LOCAL_DELIBERATION,
+            OpenAICompatLLMClient,
+        )
+
+        class RespostaVazia:
+            status_code = 200
+            text = ""
+
+            def json(self):
+                return {
+                    "choices": [
+                        {"finish_reason": "length", "message": {"content": ""}}
+                    ],
+                    "usage": {"prompt_tokens": 30, "completion_tokens": 4096},
+                }
+
+        class ClienteQuePensaDemais:
+            async def post(self, *a, **kw):
+                return RespostaVazia()
+
+            async def aclose(self):
+                return None
+
+        cliente = OpenAICompatLLMClient(client=ClienteQuePensaDemais())
+        with pytest.raises(LLMError, match="raciocínio"):
+            await cliente.structured(
+                messages=[Message(role="user", content="oi")],
+                output_schema=LlmDecision,
+                model_profile=LOCAL_DELIBERATION,
+            )
+
+
+class TestClassificacaoDeErroNaTraducao:
+    """O código de erro precisa dizer o que de fato falhou.
+
+    Pydantic obriga validador a levantar `ValueError`, apagando o tipo da
+    exceção. O `except ValueError` genérico rotulava tudo como
+    `PLANNING_ERROR` — inclusive falha de proveniência, que não tem relação
+    com planejamento. Contra modelo local isso reportava erro de planejamento
+    em toda execução e mandava quem depura olhar para o lugar errado.
+    """
+
+    def test_falta_de_proveniencia_nao_vira_erro_de_planejamento(self):
+        raw = act_output()
+        raw.action.derived_from = []
+
+        with pytest.raises(Exception) as exc:
+            to_decision(raw, plan_id=uuid4())
+
+        assert exc.value.error_code is ErrorCode.TOOL_VALIDATION_ERROR
+        assert "derived_from" in str(exc.value)
+
+    def test_falha_sem_codigo_embutido_continua_planning_error(self):
+        """O padrao nao muda: so o que se anuncia e reclassificado."""
+        from neuroloop.llm.schemas import _codigo_embutido
+
+        assert _codigo_embutido("erro qualquer sem taxonomia") is ErrorCode.PLANNING_ERROR
+
+    def test_codigo_anunciado_e_preservado(self):
+        from neuroloop.llm.schemas import _codigo_embutido
+
+        assert (
+            _codigo_embutido("Value error, INVALID_PLAN: ciclo")
+            is ErrorCode.INVALID_PLAN
+        )

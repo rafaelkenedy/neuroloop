@@ -15,6 +15,7 @@ from neuroloop.persistence.session import (
     create_all,
     database_url,
     drop_all,
+    select_selector_loop,
     session_scope,
 )
 
@@ -31,5 +32,6 @@ __all__ = [
     "create_all",
     "database_url",
     "drop_all",
+    "select_selector_loop",
     "session_scope",
 ]

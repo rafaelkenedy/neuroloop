@@ -29,6 +29,14 @@ Este projeto pretende seguir [Semantic Versioning](https://semver.org/lang/pt-BR
 
 ### Corrigido
 
+- Compatibilidade com Python 3.14. `configure_event_loop` acessava
+  `asyncio.WindowsSelectorEventLoopPolicy` e `get_event_loop_policy`, deprecados
+  no 3.14 (remoção no 3.16); com `filterwarnings = ["error"]` a suíte nem
+  coletava. O acesso à policy agora é feito sob `warnings.catch_warnings`, e os
+  pontos de entrada que controlam o próprio loop (`migrations/env.py`,
+  `scripts/live_local_model.py`) passaram a `asyncio.run(coro,
+  loop_factory=select_selector_loop)` — forma não deprecada. Suíte: 619 testes
+  em 3.13 e 3.14, SQLite e PostgreSQL 17.
 - Ids de observação não apareciam no prompt para observação confiável, embora a
   instrução mandasse citá-los em `derived_from` e a tradução exigisse UUID
   (C23). O contrato era impossível de cumprir e nenhum modelo o cumpria.

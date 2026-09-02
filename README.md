@@ -27,7 +27,7 @@ Fonte: [`pyproject.toml`](pyproject.toml).
 
 ## Pré-requisitos
 
-- Python 3.13 ou superior (`requires-python = ">=3.13"`).
+- Python 3.13 ou superior (`requires-python = ">=3.13"`). Testado em 3.13 e 3.14.
 - Docker e Docker Compose, para subir o PostgreSQL de desenvolvimento.
 - A suíte de testes roda sem Docker: por padrão usa SQLite em arquivo temporário.
 

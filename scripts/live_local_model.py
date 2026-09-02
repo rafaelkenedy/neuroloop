@@ -53,7 +53,7 @@ from neuroloop.persistence.repositories import (  # noqa: E402
     ActionRepository,
     RunRepository,
 )
-from neuroloop.persistence.session import configure_event_loop  # noqa: E402
+from neuroloop.persistence.session import select_selector_loop  # noqa: E402
 from neuroloop.runtime.agent_runtime import AgentRuntime  # noqa: E402
 
 
@@ -257,7 +257,6 @@ async def main() -> int:
     )
     args = parser.parse_args()
 
-    configure_event_loop()
     estados: Counter[str] = Counter()
     fatos: list[dict] = []
 
@@ -297,4 +296,4 @@ async def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(asyncio.run(main()))
+    raise SystemExit(asyncio.run(main(), loop_factory=select_selector_loop))

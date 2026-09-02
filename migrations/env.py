@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 from sqlalchemy.pool import NullPool
 
 from neuroloop.persistence.models import Base
-from neuroloop.persistence.session import configure_event_loop, database_url
+from neuroloop.persistence.session import database_url, select_selector_loop
 
 config = context.config
 if config.config_file_name is not None:
@@ -64,5 +64,6 @@ async def run_migrations_online() -> None:
 if context.is_offline_mode():
     run_migrations_offline()
 else:
-    configure_event_loop()
-    asyncio.run(run_migrations_online())
+    # loop_factory (3.12+) em vez de mexer na event loop policy global: o
+    # psycopg async exige SelectorEventLoop no Windows.
+    asyncio.run(run_migrations_online(), loop_factory=select_selector_loop)

@@ -27,9 +27,16 @@ Fonte: [`pyproject.toml`](pyproject.toml).
 
 ## Pré-requisitos
 
-- Python 3.13 ou superior (`requires-python = ">=3.13"`). Testado em 3.13 e 3.14.
+- Python 3.13 ou superior (`requires-python = ">=3.13"`). Suíte verificada em 3.13 e
+  3.14.
 - Docker e Docker Compose, para subir o PostgreSQL de desenvolvimento.
 - A suíte de testes roda sem Docker: por padrão usa SQLite em arquivo temporário.
+
+No Windows, o psycopg assíncrono exige o `SelectorEventLoop`; os pontos de entrada já
+o configuram (`configure_event_loop` para a suíte, `select_selector_loop` como
+`loop_factory` nas migrations e no script de modelo local). Sob Python 3.14 a API de
+event loop policy está deprecada — o código suprime o `DeprecationWarning` local, sem
+o qual a suíte (que roda com `filterwarnings = ["error"]`) não coletaria.
 
 ## Instalação
 
@@ -138,8 +145,9 @@ Benchmarks B1–B5 com amostragem completa (o padrão da suíte é `N=3`, por ve
 NEUROLOOP_BENCH_SEEDS=30 .venv/Scripts/python.exe -m pytest tests/benchmarks -m benchmark -s
 ```
 
-Estado verificado na árvore atual: **598 testes passando em SQLite e em PostgreSQL**;
-B1–B5 aprovados com `N=30`, sem falhas duras.
+Estado verificado na árvore atual: **619 testes passando em SQLite e em PostgreSQL**,
+em Python 3.13 e 3.14; B1–B5 aprovados com `N=30`, sem falhas duras
+(`false_success_rate` 0%, limite superior do IC95 em 11%).
 
 ### Lint
 

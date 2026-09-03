@@ -325,6 +325,10 @@ class AgentRuntime:
             confianca = await ObservationRepository(session).trust_map(
                 state.checkpoint.run_id
             )
+            if state.anchor_id is None:
+                state.anchor_id = await ObservationRepository(session).anchor_id(
+                    state.checkpoint.run_id
+                )
             await ObservationRepository(session).mark_consumed(
                 [o.id for o in observations], now=now
             )
@@ -341,6 +345,7 @@ class AgentRuntime:
             checkpoint=state.checkpoint,
             now=now,
             plan=plan,
+            goal_observation_id=state.anchor_id,
             observations=tuple(observations),
             memories=tuple(memories),
             errors=tuple(state.errors[-3:]),
@@ -853,6 +858,8 @@ class _RunState:
     machine: RunStateMachine
     resume_phase: RunPhase | None = None
     active_plan: Plan | None = None
+    anchor_id: UUID | None = None
+    """Id da observação do goal, resolvido uma vez e reusado por ciclo."""
     observations: list = field(default_factory=list)
     errors: list[RecentError] = field(default_factory=list)
     goal_outcomes: list[CriterionOutcome] = field(default_factory=list)

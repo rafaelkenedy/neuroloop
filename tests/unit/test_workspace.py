@@ -355,6 +355,35 @@ class TestProvenienciaCitavel:
         for obs in observacoes:
             assert str(obs.id) in prompt, f"id ausente para trust={obs.trust}"
 
+    def test_ancora_do_goal_sobrevive_ao_consumo(self):
+        """Do 2º ciclo em diante a observação do goal já foi consumida e não
+
+        volta em `observations`. A instrução ainda manda citá-la em
+        `derived_from`; sem a âncora na seção GOAL o modelo cai numa string
+        literal e reprova na validação de UUID.
+        """
+        ancora = uuid4()
+        ctx = WorkspaceBuilder(ContextBudget()).build(
+            goal=make_goal(success_criteria=(FileExists(path="out.json"),)),
+            checkpoint=make_checkpoint(iteration=3),
+            now=NOW,
+            goal_observation_id=ancora,
+            observations=(),
+        )
+        assert ctx.goal.observation_id == ancora
+        prompt = render_prompt(ctx)
+        assert str(ancora) in prompt
+        assert "# GOAL" in prompt.split(str(ancora))[0]
+
+    def test_sem_ancora_a_secao_goal_nao_quebra(self):
+        ctx = WorkspaceBuilder(ContextBudget()).build(
+            goal=make_goal(success_criteria=(FileExists(path="out.json"),)),
+            checkpoint=make_checkpoint(),
+            now=NOW,
+        )
+        assert ctx.goal.observation_id is None
+        assert "Observação de origem" not in render_prompt(ctx)
+
 
 class TestNomesDeToolResolvem:
     """O nome que o prompt exibe precisa ser o nome que o registry resolve.

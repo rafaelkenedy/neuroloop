@@ -50,6 +50,10 @@ class GoalView(BaseModel):
     success_criteria: tuple[Criterion, ...]
     constraints: tuple[Constraint, ...] = ()
     deadline: datetime | None = None
+    observation_id: UUID | None = None
+    """Id da observação de `goal` — âncora de proveniência citável em
+    `derived_from` durante todo o run, mesmo depois de consumida do fluxo
+    de observações."""
 
 
 class BudgetView(BaseModel):
@@ -129,6 +133,7 @@ class WorkspaceBuilder:
         checkpoint: RunCheckpoint,
         now: datetime,
         plan: Plan | None = None,
+        goal_observation_id: UUID | None = None,
         observations: tuple[Observation, ...] = (),
         memories: tuple[EpisodeMemory, ...] = (),
         errors: tuple[RecentError, ...] = (),
@@ -183,6 +188,7 @@ class WorkspaceBuilder:
                 success_criteria=goal.success_criteria,
                 constraints=goal.constraints,
                 deadline=goal.deadline,
+                observation_id=goal_observation_id,
             ),
             current_plan=plan,
             current_step=_current_step(plan, checkpoint),

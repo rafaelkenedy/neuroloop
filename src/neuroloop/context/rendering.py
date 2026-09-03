@@ -123,6 +123,13 @@ def _render_goal(context: WorkingContext) -> str:
     ]
     if context.goal.deadline:
         linhas.append(f"Prazo: {context.goal.deadline.isoformat()}")
+    if context.goal.observation_id is not None:
+        # A âncora de proveniência do run. Fica aqui, na seção protegida, e
+        # não só em OBSERVATIONS: a observação do goal é consumida no
+        # primeiro ciclo, mas `derived_from` pode citá-la o run inteiro.
+        linhas.append(
+            f"\nObservação de origem (cite em derived_from): {context.goal.observation_id}"
+        )
     return "\n".join(linhas)
 
 

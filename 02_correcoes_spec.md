@@ -893,3 +893,52 @@ propósito.
 para capturar a mensagem do `DeliberationError` — o `RunResult` devolve apenas
 o `ErrorCode`. O `FakeLLMClient` não podia expor: as saídas de teste são
 escritas com `derived_from` já preenchido.
+
+---
+
+## C27 — Âncora de proveniência some do prompt após o primeiro ciclo
+
+**Problema.** C23 tornou o id da observação do goal citável — no primeiro ciclo.
+Do segundo em diante o contrato voltava a ser impossível de cumprir, por outra
+via:
+
+| Camada | O que faz |
+|---|---|
+| `TASK_INSTRUCTION` | manda citar em `derived_from` o id da observação de kind `goal` |
+| `ObservationRepository.pending` | só retorna observações com `consumed_at IS NULL` |
+| `_build_context` | marca como consumidas as observações que acabou de mostrar |
+| `ObservationRepository.trust_map` | mantém a confiança da goal para sempre — "uma ação pode legitimamente citar o objetivo, visto no primeiro ciclo" |
+
+A observação do goal é consumida no ciclo 1. Do ciclo 2 em diante ela não volta
+em `pending`, some da seção OBSERVATIONS, e o modelo é cobrado por um id que o
+prompt não mostra mais — enquanto o `trust_map` continua pronto para aceitá-lo.
+
+Medido com `Qwen3.6-35B-A3B` (Q4_K_M, servido por llama.cpp): na primeira
+deliberação, `derived_from` com UUID válido; da segunda em diante, `['goal']`,
+`['goal', 'tools', 'policy']`, e um `IMPOSSIBLE` explícito — *"a seção
+OBSERVATIONS não foi fornecida no contexto (apenas o enunciado do objetivo)...
+sem o UUID específico não é possível formatar corretamente o campo
+derived_from"*. O modelo diagnosticou o próprio bug.
+
+**Por que a suíte não pegou.** Os cenários do `FakeLLMClient` que citam a goal
+(`test_acao_direta_sem_plano`, B2–B4) resolvem em uma única deliberação: buscam
+o id via `pending` antes do primeiro ciclo consumi-lo. Nenhum exercitava uma
+segunda deliberação precisando da âncora.
+
+**Decisão.** O id da observação do goal vai na seção GOAL — protegida, nunca
+truncada, sempre presente (spec §20). `_build_context` resolve a âncora por um
+método próprio (`ObservationRepository.anchor_id`), fora de `pending`, e a
+propaga por `GoalView.observation_id`. A instrução passa a apontar para a
+"Observação de origem" do GOAL, não para OBSERVATIONS.
+
+**Impacto.** Três testes de regressão: a âncora sobrevive ao consumo
+(`test_workspace.py`), a seção GOAL não quebra sem âncora, e o id segue
+resolvível por `anchor_id` após um run completo (`test_agent_runtime.py`). Com a
+correção — e com `--reasoning-budget` capando o raciocínio do modelo — a
+primeira execução ponta a ponta contra um modelo local **concluiu o objetivo**
+com o artefato correto (`seed 2`, `delib=2`, `conteudo_ok`).
+
+**O que isto não resolve.** Só a âncora do goal. Uma observação de leitura de
+arquivo citada N ciclos depois de consumida tem o mesmo problema; um "ledger de
+proveniência" geral cobriria esse caso e fica em aberto. `falso_sucesso` e
+`excecao_vazou` seguem em zero em todas as baterias.

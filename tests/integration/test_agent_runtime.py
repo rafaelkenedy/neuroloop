@@ -195,6 +195,35 @@ class TestCicloCompleto:
         assert result.phase is RunPhase.COMPLETED
         assert result.deliberations == 1
 
+    async def test_ancora_do_goal_citavel_apos_consumo(self, engine, registry, sandbox):
+        """A observação do goal é consumida no 1º ciclo, mas segue citável.
+
+        `_build_context` resolve a âncora por `anchor_id`, fora de `pending`,
+        e a coloca na seção GOAL — protegida e sempre presente. Sem isso, do
+        2º ciclo em diante a instrução manda citar um id que não está no
+        prompt, e `derived_from` vira string literal reprovada na validação.
+        """
+        goal = await seed(engine)
+        llm = FakeLLMClient(outputs=[plano_llm()])
+        runtime = build_runtime(engine, registry, sandbox, llm)
+        checkpoint = await runtime.start(goal)
+
+        factory = build_session_factory(engine)
+        async with factory() as session:
+            repo = ObservationRepository(session)
+            antes = await repo.pending(checkpoint.run_id)
+            ancora = await repo.anchor_id(checkpoint.run_id)
+
+        assert ancora == next(o.id for o in antes if o.kind == "goal")
+
+        await runtime.run_until_pause(checkpoint.run_id)
+
+        async with factory() as session:
+            repo = ObservationRepository(session)
+            depois = await repo.pending(checkpoint.run_id)
+            assert all(o.kind != "goal" for o in depois), "goal ainda em pending"
+            assert await repo.anchor_id(checkpoint.run_id) == ancora
+
     async def test_execucao_fica_auditavel(self, engine, registry, sandbox):
         goal = await seed(engine)
         llm = FakeLLMClient(outputs=[plano_llm()])

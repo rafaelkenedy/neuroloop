@@ -56,6 +56,25 @@ class ObservationRepository:
         )
         return [_to_observation(r) for r in rows]
 
+    async def anchor_id(self, run_id: UUID) -> UUID | None:
+        """Id da observação de `goal` — a âncora de proveniência do run.
+
+        Consultada à parte de `pending` de propósito: a observação do
+        objetivo é consumida no primeiro ciclo, mas continua citável em
+        `derived_from` durante todo o run (é o que `trust_map` já assume).
+        Sem isto, a partir do segundo ciclo o modelo é instruído a citar um
+        id que não está mais no prompt.
+        """
+        return await self.session.scalar(
+            select(models.Observation.id)
+            .where(
+                models.Observation.run_id == run_id,
+                models.Observation.kind == "goal",
+            )
+            .order_by(models.Observation.received_at)
+            .limit(1)
+        )
+
     async def trust_map(self, run_id: UUID) -> dict[UUID, str]:
         """Confiança de **todas** as observações do run, consumidas ou não.
 

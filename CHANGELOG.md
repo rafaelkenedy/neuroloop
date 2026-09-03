@@ -26,6 +26,9 @@ Este projeto pretende seguir [Semantic Versioning](https://semver.org/lang/pt-BR
   componentes. Sem isso o perfil de modelo ficava fixo em `DELIBERATION`.
 - `docs/TESTE_MODELO_LOCAL.md`: medições de velocidade por modelo, razão de cada
   teto configurado e o que ajustar para repetir o teste em hardware melhor.
+- `scripts/live_local_model.py` ganha `NEUROLOOP_LIVE_DUMP_RAW`: registra no
+  relatório cada saída estruturada crua do modelo, inicial e reparo. Foi o que
+  expôs C27.
 
 ### Corrigido
 
@@ -56,6 +59,15 @@ Este projeto pretende seguir [Semantic Versioning](https://semver.org/lang/pt-BR
   cíclico como `PLANNING_ERROR` em vez de `INVALID_PLAN`.
 - Mensagem de erro do Deliberator repetia o código (`X: X: detalhe`) ao
   reembrulhar `DecisionTranslationError`.
+- A observação do goal — âncora de proveniência citável em `derived_from` o run
+  inteiro — era consumida no primeiro ciclo e sumia do prompt (C27). Da segunda
+  deliberação em diante a instrução mandava citar um id que não estava mais
+  visível, e o modelo caía numa string literal (`['goal']`) reprovada na
+  validação de UUID. O id passa a ser renderizado na seção GOAL, protegida e
+  sempre presente; `_build_context` o resolve por `ObservationRepository.
+  anchor_id`, fora de `pending`. Com isso (e `--reasoning-budget` capando o
+  raciocínio do `Qwen3.6-35B-A3B`), a primeira execução ponta a ponta contra
+  modelo local concluiu o objetivo.
 
 ## [0.0.1] — não lançado
 

@@ -68,13 +68,18 @@ class _ClienteQueLembra:
     def __init__(self, real) -> None:
         self._real = real
         self.ultima_falha: str | None = None
+        self.raw_saidas: list[str] = []
+        """Cada saída estruturada do modelo, para inspeção fora da suíte."""
 
     async def structured(self, **kwargs):
         try:
-            return await self._real.structured(**kwargs)
+            resposta = await self._real.structured(**kwargs)
         except LLMError as error:
             self.ultima_falha = str(error)
             raise
+        if os.environ.get("NEUROLOOP_LIVE_DUMP_RAW"):
+            self.raw_saidas.append(resposta.output.model_dump_json(indent=2))
+        return resposta
 
     async def aclose(self) -> None:
         await self._real.aclose()
@@ -234,6 +239,8 @@ async def uma_execucao(tmp: Path, seed: int, modelo: str, aprovar: bool) -> dict
         fato["excecao"] = None
         fato["llm_falha"] = cliente.ultima_falha
         fato["delib_falha"] = deliberador.ultima_falha
+        if cliente.raw_saidas:
+            fato["raw_saidas"] = cliente.raw_saidas
     except Exception as error:  # noqa: BLE001 - queremos registrar, não abortar
         fato["estado"] = "EXCECAO_VAZOU"
         fato["excecao"] = f"{type(error).__name__}: {error}"
@@ -281,6 +288,8 @@ async def main() -> int:
                 print(f"     llm: {fato['llm_falha'][:250]}")
             if fato.get("delib_falha"):
                 print(f"     delib: {fato['delib_falha'][:300]}")
+            for i, cru in enumerate(fato.get("raw_saidas", [])):
+                print(f"     --- saida crua {i} ---\n{cru}")
 
     print("\n--- resumo ---")
     for estado, n in estados.most_common():
